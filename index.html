@@ -160,7 +160,7 @@ function App() {
     if (cursor<dayEnd) gaps.push({s:cursor,e:dayEnd});
     var gapsLeft = gaps.map(function(g){ return {s:g.s,e:g.e,used:0}; });
     var placed=[];
-    var queueCursor = blocks.length ? Math.max(dayStart, blocks[blocks.length-1].e) : dayStart;
+    var queueCursor = Math.max(nowMin, blocks.length ? blocks[blocks.length-1].e : dayStart);
     sorted.active.forEach(function(t){
       var dur = SPOON_MIN[t.effort] || 30;
       var mayFit = t.priority >= fitLevel;
