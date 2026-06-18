@@ -168,8 +168,8 @@ function App() {
       if (mayFit){
         for (gi=0; gi<gapsLeft.length; gi++){
           var g = gapsLeft[gi];
-          var start = Math.max(g.s, g.s + g.used);
-          if (start + dur <= g.e && g.e > nowMin - 1){ g.used=(start-g.s)+dur; put={start:start,end:start+dur}; break; }
+          var start = Math.max(g.s + g.used, nowMin);
+          if (start + dur <= g.e && g.e > nowMin){ g.used = (start - g.s) + dur; put = {start:start, end:start+dur}; break; }
         }
         if (!put && dur <= sizeThreshold){ put = {start:nowMin, end:nowMin+dur, loose:true}; }
       }
@@ -376,7 +376,7 @@ function App() {
   return h("div",{style:{minHeight:"100vh"}},
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.1.2"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.1.3"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
