@@ -174,7 +174,7 @@ function App() {
         if (!put && dur <= sizeThreshold){ put = {start:nowMin, end:nowMin+dur, loose:true}; }
       }
       if (!put){ put = {start:queueCursor, end:queueCursor+dur, queued:true}; queueCursor += dur; }
-      placed.push(Object.assign({}, t, { dur:dur, schStart:fmtMin(put.start), schEnd:fmtMin(put.end), startMin:put.start, loose:put.loose, queued:put.queued }));
+      placed.push(Object.assign({}, t, { dur:dur, schStart:fmtMin(put.start), schEnd:fmtMin(put.end), startMin:put.start, endMin:put.end, loose:put.loose, queued:put.queued }));
     });
     var railItems = blocks.map(function(b){ return Object.assign({type:"appt", startMin:b.s, endMin:b.e}, b); })
       .concat(placed.map(function(p){ return Object.assign({type:"task"}, p); }))
@@ -376,7 +376,7 @@ function App() {
   return h("div",{style:{minHeight:"100vh"}},
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.1.4"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.1.5"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
