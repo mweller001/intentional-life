@@ -127,6 +127,28 @@ function minToLabel(min){ if(min<60) return min+"m"; var hh=Math.floor(min/60), 
 function priorityTone(p){ return prioritySwatch(p).color; }
 function nowMinutes(){ var d=new Date(); return d.getHours()*60 + d.getMinutes(); }
 
+// Self-contained inline title editor. Owns its own draft. Commits on Enter and on blur,
+// cancels on Escape, and — critically — commits on UNMOUNT for any reason (re-sort, tab
+// switch, timer re-render dropping the card). onCommit(value) and onCancel() are guarded
+// upstream against empty/unchanged, so a redundant call is a harmless no-op.
+function EditField(props){
+  var s = useState(props.initial || ""), val = s[0], setVal = s[1];
+  var ref = React.useRef(val); ref.current = val;
+  var committed = React.useRef(false);
+  function commit(){ if(committed.current) return; committed.current = true; props.onCommit(ref.current); }
+  useEffect(function(){
+    return function(){ commit(); }; // fires on unmount, however the unmount was caused
+  }, []);
+  return h("input",{autoFocus:true,value:val,
+    onChange:function(e){ setVal(e.target.value); },
+    onKeyDown:function(e){
+      if(e.key==="Enter"){ e.preventDefault(); commit(); }
+      else if(e.key==="Escape"){ committed.current = true; props.onCancel(); }
+    },
+    onBlur:function(){ commit(); },
+    style:props.style});
+}
+
 function App() {
   var s_loading = useState(true), loading = s_loading[0], setLoading = s_loading[1];
   var s_status = useState(""), status = s_status[0], setStatus = s_status[1];
@@ -141,10 +163,9 @@ function App() {
   var s_eff = useState(2), newEffort = s_eff[0], setNewEffort = s_eff[1];
   var s_pri = useState(5), newPriority = s_pri[0], setNewPriority = s_pri[1];
   var s_now = useState(nowMinutes()), nowMin = s_now[0], setNowMin = s_now[1];
-  // v0.2 contextual popup: which task, where on screen, and an in-popup edit draft.
+  // v0.2 contextual popup: which task and where on screen. (editId tracks inline editing.)
   var s_pop = useState(null), popup = s_pop[0], setPopup = s_pop[1]; // {id,x,y} or null
   var s_edit = useState(null), editId = s_edit[0], setEditId = s_edit[1]; // task id being text-edited, or null
-  var s_draft = useState(""), draft = s_draft[0], setDraft = s_draft[1];
 
   useEffect(function(){
     var t = setInterval(function(){ setNowMin(nowMinutes()); }, 60000);
@@ -247,18 +268,28 @@ function App() {
     persist(id, { done: !t.done });
   }, [tasks, persist]);
 
-  var saveTitle = useCallback(function(id){
-    var t = draft.trim();
-    if (t){ persist(id, { title:t }); }
+  // value comes from the field itself (it owns its draft); guard empty + unchanged here too.
+  var saveTitle = useCallback(function(id, value){
+    var t = (value||"").trim();
+    setTasks(function(prev){
+      var cur = prev.filter(function(x){return x.id===id;})[0];
+      if (t && cur && t !== cur.title){
+        var dataObj = { title:t, project:cur.project, priority:cur.priority, effort:clampEffort(cur.effort), note:cur.note, background:cur.background, done:cur.done };
+        Store.update(id, dataObj).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
+        return prev.map(function(x){ return x.id===id ? Object.assign({}, x, { title:t }) : x; });
+      }
+      return prev;
+    });
     setEditId(null);
-  }, [draft, persist]);
+  }, []);
 
   var setPriorityFor = useCallback(function(id, v){
     persist(id, { priority:v });
   }, [persist]);
 
-  var openEdit = useCallback(function(id, curTitle){
-    setEditId(id); setDraft(curTitle);
+  var openEdit = useCallback(function(id){
+    setEditId(id);
+    setPopup(null); // Option 1: Edit launches the inline card field; the popup's job is done.
   }, []);
 
   var closePopup = useCallback(function(){ setPopup(null); setEditId(null); }, []);
@@ -337,10 +368,10 @@ function App() {
         var sw = prioritySwatch(it.priority);
         var ph = pressHandlers(it);
         var titleNode = (editId===it.id)
-          ? h("input",{autoFocus:true,value:draft,onChange:function(e){setDraft(e.target.value);},
-              onKeyDown:function(e){ if(e.key==="Enter"){ saveTitle(it.id); } else if(e.key==="Escape"){ setEditId(null); } },
-              onBlur:function(){ saveTitle(it.id); },
-              style:{width:"100%",boxSizing:"border-box",border:"1px solid "+sw.color,borderRadius:3,padding:"4px 7px",fontSize:14,color:C.ink,fontFamily:"inherit",fontWeight:500}})
+          ? h(EditField,{ initial: it.title,
+              onCommit:function(v){ saveTitle(it.id, v); },
+              onCancel:function(){ setEditId(null); },
+              style:{width:"100%",boxSizing:"border-box",border:"1px solid "+sw.color,borderRadius:3,padding:"4px 7px",fontSize:14,color:C.ink,fontFamily:"inherit",fontWeight:500} })
           : h("div",{style:{fontSize:14,color:C.ink,fontWeight:500,lineHeight:1.3,cursor:"default"}}, it.title);
         railChildren.push(
           h("div",Object.assign({key:it.id||("t"+i),style:{border:"1px solid "+C.panelEdge,borderLeft:"5px solid "+sw.color,background:C.panel,borderRadius:3,padding:"10px 12px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start",WebkitUserSelect:"none",userSelect:"none"}},ph),
@@ -470,27 +501,18 @@ function App() {
     // clamp so the menu stays on-screen. width ~ edit btn + 5 swatches; height one row (or two if editing).
     var vw = (typeof window!=="undefined") ? window.innerWidth : 380;
     var vh = (typeof window!=="undefined") ? window.innerHeight : 700;
-    var W = 250, Hpop = (editId===popup.id) ? 112 : 60;
+    var W = 250, Hpop = 60;
     var x = Math.min(popup.x, vw - W - 10); if(x<10) x=10;
     var y = Math.min(popup.y, vh - Hpop - 10); if(y<10) y=10;
+    // Edit launches the inline card field and closes the popup; priority swatches commit in place.
+    var actionBtn = h("button",{key:"edit",onClick:function(e){ e.stopPropagation(); openEdit(task.id); },
+          style:{border:"1px solid "+C.panelEdge,background:C.paper,borderRadius:4,padding:"7px 12px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer",whiteSpace:"nowrap"}}, "Edit");
     var menuChildren = [
       h("div",{key:"row",style:{display:"flex",alignItems:"center",gap:12}},
-        h("button",{key:"edit",onClick:function(e){ e.stopPropagation(); openEdit(task.id, task.title); },
-          style:{border:"1px solid "+C.panelEdge,background:C.paper,borderRadius:4,padding:"7px 12px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer",whiteSpace:"nowrap"}}, "Edit"),
+        actionBtn,
         swatchRow(task.priority, function(v){ setPriorityFor(task.id, v); }, 24)
       )
     ];
-    if(editId===popup.id){
-      menuChildren.push(
-        h("div",{key:"editrow",style:{marginTop:10,display:"flex",gap:6}},
-          h("input",{autoFocus:true,value:draft,onChange:function(e){setDraft(e.target.value);},
-            onKeyDown:function(e){ if(e.key==="Enter"){ saveTitle(task.id); setPopup(null); } else if(e.key==="Escape"){ setEditId(null); } },
-            style:{flex:1,boxSizing:"border-box",border:"1px solid "+C.amber,borderRadius:3,padding:"6px 8px",fontSize:14,fontFamily:"inherit",color:C.ink}}),
-          h("button",{onClick:function(e){ e.stopPropagation(); saveTitle(task.id); setPopup(null); },
-            style:{border:"none",background:C.ink,color:C.paper,borderRadius:3,padding:"6px 12px",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Save")
-        )
-      );
-    }
     return h("div",{key:"backdrop",onClick:closePopup,onContextMenu:function(e){e.preventDefault();closePopup();},
         style:{position:"fixed",inset:0,zIndex:50,background:"rgba(28,31,38,0.04)"}},
       h("div",{onClick:function(e){e.stopPropagation();},
@@ -509,7 +531,7 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.1"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
