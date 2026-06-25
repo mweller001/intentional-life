@@ -71,12 +71,26 @@ function readTask(row) {
     note: d.note || "",
     done: !!d.done,
     background: !!d.background,
+    // prompt fields — all optional; absent = no prompt. showOn gates visibility,
+    // fireAt is the Begin moment (a "HH:MM" on the showOn date), warnMin the pre-warning.
+    showOn: d.showOn || null,            // "YYYY-MM-DD" or null
+    fireAt: d.fireAt || null,            // "HH:MM" or null (requires showOn)
+    warnMin: typeof d.warnMin === "number" ? d.warnMin : 0, // 0 = none
     updated_at: row.updated_at
   };
 }
 function readAppt(row) {
   var d = row.data || {};
   return { id: row.id, title: d.title || "(appointment)", start: d.start || "09:00", end: d.end || "10:00" };
+}
+// Single source of truth for serializing a task back to its stored data object.
+// Every write path uses this so no field (incl. prompt fields) can be dropped.
+function taskToData(t){
+  return {
+    title: t.title, project: t.project, priority: t.priority, effort: clampEffort(t.effort),
+    note: t.note, background: t.background, done: t.done,
+    showOn: t.showOn || null, fireAt: t.fireAt || null, warnMin: t.warnMin || 0
+  };
 }
 
 // ============================================================
@@ -118,6 +132,10 @@ function fmtMin(mm){ return String(Math.floor(mm/60)%24).padStart(2,"0")+":"+Str
 function minToLabel(min){ if(min<60) return min+"m"; var hh=Math.floor(min/60), m=min%60; return m? hh+"h"+m : hh+"h"; }
 function priorityTone(p){ return prioritySwatch(p).color; }
 function nowMinutes(){ var d=new Date(); return d.getHours()*60 + d.getMinutes(); }
+// date helpers for prompt visibility + firing. Local time, YYYY-MM-DD.
+function todayStr(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function timeToMin(s){ if(!s) return null; var p=String(s).split(":"); return (+p[0])*60 + (+p[1]); }
+function minToTime(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"); }
 
 // Self-contained inline title editor. Owns its own draft. Commits on Enter and on blur,
 // cancels on Escape, and — critically — commits on UNMOUNT for any reason (re-sort, tab
@@ -156,9 +174,25 @@ function App() {
   // v0.2 contextual popup: which task and where on screen. (editId tracks inline editing.)
   var s_pop = useState(null), popup = s_pop[0], setPopup = s_pop[1]; // {id,x,y} or null
   var s_edit = useState(null), editId = s_edit[0], setEditId = s_edit[1]; // task id being text-edited, or null
+  // capture prompt fields (optional, behind a "+ prompt" disclosure; default empty = no prompt)
+  var s_pOpen = useState(false), promptOpen = s_pOpen[0], setPromptOpen = s_pOpen[1];
+  var s_pDate = useState(""), newShowOn = s_pDate[0], setNewShowOn = s_pDate[1];
+  var s_pTime = useState(""), newFireAt = s_pTime[0], setNewFireAt = s_pTime[1];
+  var s_pWarn = useState(0), newWarn = s_pWarn[0], setNewWarn = s_pWarn[1];
+  // active fired prompt shown full-screen: { id, stage:"warn"|"begin" } or null
+  var s_fire = useState(null), activePrompt = s_fire[0], setActivePrompt = s_fire[1];
+  // bookkeeping: which (taskId|fireAt|stage) tuples have already fired this session, so we
+  // fire once per stage per fireAt value. Keyed by id+fireAt+stage; resets naturally when
+  // snooze rewrites fireAt (new key → eligible to fire again — the "whole unit slides" rule).
+  var firedRef = React.useRef({});
+  // mount time floor: on (re)open, nothing whose moment already passed fires (fire-forward-only).
+  var mountMinRef = React.useRef(nowMinutes());
 
+  // TICK_MS: client-only Rung-1 responsiveness dial. 15s is well inside the minute a prompt is
+  // keyed to. REVISIT for the client-server version — push delivery should fire within seconds.
+  var TICK_MS = 15000;
   useEffect(function(){
-    var t = setInterval(function(){ setNowMin(nowMinutes()); }, 60000);
+    var t = setInterval(function(){ setNowMin(nowMinutes()); }, TICK_MS);
     return function(){ clearInterval(t); };
   }, []);
 
@@ -172,13 +206,70 @@ function App() {
     }).then(function(){ setLoading(false); });
   }, []);
 
+  // PROMPT FIRING ENGINE (client-only, Rung 1). Runs each tick (via nowMin dep).
+  // For each task with a prompt firing today, derive Begin (fireAt) and Transition
+  // (fireAt - warnMin) from the LIVE fireAt. Fire the earliest due, unacknowledged stage
+  // that is at/after the mount floor (fire-forward-only). One prompt shown at a time;
+  // the next surfaces on a later tick. Snooze rewrites fireAt → new keys → unit re-arms.
+  useEffect(function(){
+    if (activePrompt) return;            // a prompt is already on screen; wait for dismiss/snooze
+    var today = todayStr();
+    var floor = mountMinRef.current;     // nothing before (re)open fires
+    var candidates = [];
+    tasks.forEach(function(t){
+      if (t.done) return;
+      if (!t.showOn || !t.fireAt) return;   // no prompt set
+      if (t.showOn !== today) return;       // prompt fires only on the show-on date
+      var beginMin = timeToMin(t.fireAt);
+      var stages = [];
+      if (t.warnMin > 0){ stages.push({ stage:"warn", at: beginMin - t.warnMin }); }
+      stages.push({ stage:"begin", at: beginMin });
+      stages.forEach(function(st){
+        var key = t.id + "|" + t.fireAt + "|" + st.stage;
+        if (firedRef.current[key]) return;        // already fired for this fireAt value
+        if (st.at < floor) return;                // fire-forward-only: passed before open
+        if (nowMin >= st.at){ candidates.push({ id:t.id, stage:st.stage, at:st.at, key:key }); }
+      });
+    });
+    if (candidates.length){
+      // most urgent first: earliest moment, and within a tie warn before begin
+      candidates.sort(function(a,b){ return a.at-b.at || (a.stage==="warn"?-1:1); });
+      var pick = candidates[0];
+      firedRef.current[pick.key] = true;
+      setActivePrompt({ id:pick.id, stage:pick.stage });
+    }
+  }, [nowMin, tasks, activePrompt]);
+
+  // Snooze: rewrite fireAt later by `mins`, close the popup. Whole unit slides — both stages
+  // re-derive from the new fireAt, and the new keys make them eligible to fire again.
+  var snoozePrompt = useCallback(function(mins){
+    if (!activePrompt) return;
+    var id = activePrompt.id;
+    setActivePrompt(null);
+    setTasks(function(prev){
+      var cur = prev.filter(function(x){return x.id===id;})[0];
+      if (!cur || !cur.fireAt) return prev;
+      var newFire = minToTime(timeToMin(cur.fireAt) + mins);
+      var merged = Object.assign({}, cur, { fireAt:newFire });
+      Store.update(id, taskToData(merged)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
+      return prev.map(function(x){ return x.id===id ? merged : x; });
+    });
+  }, [activePrompt]);
+
+  var dismissPrompt = useCallback(function(){ setActivePrompt(null); }, []);
+
   var sorted = useMemo(function(){
-    var active = tasks.filter(function(t){return !t.done && !t.background;});
+    var today = todayStr();
+    // visibility gate: a task is eligible when it has no showOn, or its showOn is today-or-earlier.
+    // future-dated tasks are dormant — not sorted, placed, or counted, until their date arrives.
+    function visible(t){ return !t.showOn || t.showOn <= today; }
+    var active = tasks.filter(function(t){return !t.done && !t.background && visible(t);});
     var done = tasks.filter(function(t){return t.done;});
-    var background = tasks.filter(function(t){return t.background && !t.done;});
+    var background = tasks.filter(function(t){return t.background && !t.done && visible(t);});
+    var dormant = tasks.filter(function(t){return !t.done && !t.background && !visible(t);});
     active.sort(SORTS[sortKey].fn);
-    return { active:active, done:done, background:background };
-  }, [tasks, sortKey]);
+    return { active:active, done:done, background:background, dormant:dormant };
+  }, [tasks, sortKey, nowMin]);
 
   var topBackground = useMemo(function(){
     var bgs = sorted.background.slice().sort(function(a,b){return b.priority-a.priority;});
@@ -259,12 +350,19 @@ function App() {
   var addTask = useCallback(function(){
     var title = newTitle.trim(); if(!title) return;
     var dataObj = { title:title, project:"—", priority:newPriority, effort:clampEffort(newEffort), done:false };
+    // prompt fields are optional; only attach a fireAt/warn if a showOn date is set.
+    if (newShowOn){
+      dataObj.showOn = newShowOn;
+      if (newFireAt){ dataObj.fireAt = newFireAt; dataObj.warnMin = newWarn || 0; }
+    }
     setStatus("Saving…");
     Store.add("task", dataObj).then(function(row){
       setTasks(function(prev){ return prev.concat([readTask(row)]); });
-      setNewTitle(""); setNewEffort(2); setNewPriority(5); setStatus("");
+      setNewTitle(""); setNewEffort(2); setNewPriority(5);
+      setNewShowOn(""); setNewFireAt(""); setNewWarn(0); setPromptOpen(false);
+      setStatus("");
     }).catch(function(e){ setStatus("Save failed: " + (e.message||e)); });
-  }, [newTitle, newEffort, newPriority]);
+  }, [newTitle, newEffort, newPriority, newShowOn, newFireAt, newWarn]);
 
   // Merge-and-persist: take the current task, apply a patch, write the full data object back.
   // Centralizes writes so no path (done/title/priority) silently drops another's fields.
@@ -273,8 +371,7 @@ function App() {
       var next = prev.map(function(x){ return x.id===id ? Object.assign({}, x, patch) : x; });
       var t = next.filter(function(x){return x.id===id;})[0];
       if (t){
-        var dataObj = { title:t.title, project:t.project, priority:t.priority, effort:clampEffort(t.effort), note:t.note, background:t.background, done:t.done };
-        Store.update(id, dataObj).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
+        Store.update(id, taskToData(t)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
       }
       return next;
     });
@@ -292,9 +389,9 @@ function App() {
     setTasks(function(prev){
       var cur = prev.filter(function(x){return x.id===id;})[0];
       if (t && cur && t !== cur.title){
-        var dataObj = { title:t, project:cur.project, priority:cur.priority, effort:clampEffort(cur.effort), note:cur.note, background:cur.background, done:cur.done };
-        Store.update(id, dataObj).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
-        return prev.map(function(x){ return x.id===id ? Object.assign({}, x, { title:t }) : x; });
+        var merged = Object.assign({}, cur, { title:t });
+        Store.update(id, taskToData(merged)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
+        return prev.map(function(x){ return x.id===id ? merged : x; });
       }
       return prev;
     });
@@ -462,11 +559,45 @@ function App() {
     });
     var countText = sorted.active.length+" open · "+minToLabel(totalForeground)+" of focus";
     if (schedule.unfittedCount>0){ countText += " · "+schedule.unfittedCount+" past horizon"; }
+    if (sorted.dormant.length>0){ countText += " · "+sorted.dormant.length+" scheduled ahead"; }
     sortBtns.push(h("div",{key:"count",style:{marginLeft:"auto",alignSelf:"center",fontSize:11.5,color:C.faint}}, countText));
     children.push(h("div",{key:"sorts",style:{display:"flex",flexWrap:"wrap",gap:6,margin:"16px 0 0"}}, sortBtns));
 
     var effDots=[]; for(var n=1;n<=MAX_SPOON;n++){ (function(n){ effDots.push(h("button",{key:n,onClick:function(){setNewEffort(n);},"aria-label":"effort "+n,style:{width:16,height:16,borderRadius:8,cursor:"pointer",border:"none",background:n<=newEffort?C.amber:C.line}})); })(n); }
     var effHint = newEffort>=MAX_SPOON ? "≈60+ · decompose?" : "≈"+minToLabel(SPOON_MIN[newEffort]);
+    // "+ prompt" disclosure — optional, cascading: date unlocks time, time unlocks warning.
+    var warnOpts = [ [0,"none"], [5,"5 min"], [15,"15 min"], [30,"30 min"], [60,"60 min"] ];
+    var promptRows = [];
+    promptRows.push(
+      h("button",{key:"ptoggle",onClick:function(){ setPromptOpen(!promptOpen); },
+        style:{background:"none",border:"none",padding:0,marginTop:12,cursor:"pointer",fontSize:12,color:C.cold,fontWeight:600}},
+        (promptOpen?"− prompt":"+ prompt") + (newShowOn && !promptOpen ? " · set" : ""))
+    );
+    if (promptOpen){
+      var disabledTime = !newShowOn;
+      var disabledWarn = !newShowOn || !newFireAt;
+      promptRows.push(
+        h("div",{key:"pfields",style:{marginTop:10,display:"flex",gap:14,flexWrap:"wrap",alignItems:"center"}},
+          h("label",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "show on",
+            h("input",{type:"date",value:newShowOn,onChange:function(e){ setNewShowOn(e.target.value); if(!e.target.value){ setNewFireAt(""); setNewWarn(0); } },
+              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:C.ink}})),
+          h("label",{style:{fontSize:12,color:disabledTime?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "at",
+            h("input",{type:"time",value:newFireAt,disabled:disabledTime,onChange:function(e){ setNewFireAt(e.target.value); if(!e.target.value) setNewWarn(0); },
+              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledTime?C.faint:C.ink,opacity:disabledTime?0.5:1}})),
+          h("label",{style:{fontSize:12,color:disabledWarn?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "warn",
+            h("select",{value:String(newWarn),disabled:disabledWarn,onChange:function(e){ setNewWarn(Number(e.target.value)); },
+              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledWarn?C.faint:C.ink,opacity:disabledWarn?0.5:1}},
+              warnOpts.map(function(o){ return h("option",{key:o[0],value:String(o[0])}, o[1]); })))
+        )
+      );
+      promptRows.push(
+        h("div",{key:"phint",style:{marginTop:8,fontSize:10.5,color:C.faint,fontStyle:"italic"}},
+          !newShowOn ? "A date makes the task appear that day and roll forward until done."
+          : !newFireAt ? "Add a time to fire a prompt on that day (optional)."
+          : "Fires at " + newFireAt + (newWarn? " with a " + newWarn + "-min warning." : " (no pre-warning)."))
+      );
+    }
+
     children.push(
       h("div",{key:"capture",style:{marginTop:18,paddingTop:16,borderTop:"1px solid "+C.line}},
         h("input",{value:newTitle,onChange:function(e){setNewTitle(e.target.value);},onKeyDown:function(e){ if(e.key==="Enter") addTask(); },placeholder:"Capture a task — just the title is enough",style:{width:"100%",boxSizing:"border-box",border:"1px solid "+C.panelEdge,borderRadius:3,padding:"10px 12px",fontSize:14,color:C.ink,background:C.panel,fontFamily:"inherit"}}),
@@ -479,7 +610,8 @@ function App() {
             swatchRow(newPriority, function(v){ setNewPriority(v); }, 20)
           ),
           h("button",{onClick:addTask,style:{marginLeft:"auto",background:C.ink,color:C.paper,border:"none",borderRadius:3,padding:"9px 16px",fontSize:13,cursor:"pointer",fontWeight:600}}, "Capture")
-        )
+        ),
+        h("div",null, promptRows)
       )
     );
 
@@ -569,16 +701,40 @@ function App() {
     );
   }
 
+  function firePromptNode(){
+    if (!activePrompt) return null;
+    var t = tasks.filter(function(x){return x.id===activePrompt.id;})[0];
+    if (!t){ return null; }
+    var isWarn = activePrompt.stage==="warn";
+    var sw = prioritySwatch(t.priority);
+    var stageLabel = isWarn ? "Get ready" : "Now";
+    var stageSub = isWarn ? ("Starts in "+t.warnMin+" min · "+t.fireAt) : ("Begin · "+t.fireAt);
+    var snoozeBtns = [5,15,30].map(function(m){
+      return h("button",{key:m,onClick:function(){ snoozePrompt(m); },
+        style:{flex:1,border:"1px solid "+C.panelEdge,background:C.panel,color:C.ink,borderRadius:6,padding:"12px 0",fontSize:14,fontWeight:600,cursor:"pointer"}}, "+"+m+"m");
+    });
+    return h("div",{key:"firebackdrop",style:{position:"fixed",inset:0,zIndex:80,background:"rgba(28,31,38,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px"}},
+      h("div",{style:{width:"100%",maxWidth:380,background:C.paper,borderRadius:14,borderTop:"6px solid "+sw.color,padding:"26px 22px 20px",boxShadow:"0 18px 50px rgba(0,0,0,0.35)"}},
+        h("div",{style:{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:isWarn?C.cold:C.amber,fontWeight:700,marginBottom:6}}, stageLabel),
+        h("div",{style:{fontSize:22,fontWeight:600,color:C.ink,lineHeight:1.25,fontFamily:"Georgia, serif"}}, t.title),
+        h("div",{style:{fontSize:12.5,color:C.sub,marginTop:8}}, stageSub),
+        h("div",{style:{display:"flex",gap:8,marginTop:22}}, snoozeBtns),
+        h("button",{onClick:dismissPrompt,style:{width:"100%",marginTop:10,background:C.ink,color:C.paper,border:"none",borderRadius:6,padding:"13px 0",fontSize:14,fontWeight:600,cursor:"pointer"}}, "Dismiss")
+      )
+    );
+  }
+
   var tabBtns = [["foreground","Foreground"],["background","Background"],["relaxation","Relaxation"]].map(function(pair){
     var k=pair[0], label=pair[1], on=tab===k;
     return h("button",{key:k,onClick:function(){setTab(k);},style:{flex:1,border:"1px solid "+(on?C.amber:C.panelEdge),background:on?C.amberSoft:"transparent",color:on?C.ink:C.sub,borderRadius:2,padding:"9px 6px",fontSize:13,fontWeight:600,cursor:"pointer"}}, label);
   });
 
   return h("div",{style:{minHeight:"100vh"}},
+    firePromptNode(),
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.4"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.5"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
