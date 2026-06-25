@@ -523,13 +523,14 @@ function App() {
     var W = 250, Hpop = 60;
     var x = Math.min(popup.x, vw - W - 10); if(x<10) x=10;
     var y = Math.min(popup.y, vh - Hpop - 10); if(y<10) y=10;
-    // Edit launches the inline card field and closes the popup; priority swatches commit in place.
+    // Edit launches the inline card field and closes the popup.
     var actionBtn = h("button",{key:"edit",onClick:function(e){ e.stopPropagation(); openEdit(task.id); },
           style:{border:"1px solid "+C.panelEdge,background:C.paper,borderRadius:4,padding:"7px 12px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer",whiteSpace:"nowrap"}}, "Edit");
     var menuChildren = [
       h("div",{key:"row",style:{display:"flex",alignItems:"center",gap:12}},
         actionBtn,
-        swatchRow(task.priority, function(v){ setPriorityFor(task.id, v); }, 24)
+        // a swatch press sets priority, persists, and closes the popup — one gesture.
+        swatchRow(task.priority, function(v){ setPriorityFor(task.id, v); closePopup(); }, 24)
       )
     ];
     function backdropClose(e){
@@ -554,7 +555,7 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.2"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.3"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
