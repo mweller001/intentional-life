@@ -701,8 +701,10 @@ function App() {
     if (!t){ return null; }
     var isWarn = activePrompt.stage==="warn";
     var sw = prioritySwatch(t.priority);
-    var stageLabel = isWarn ? "Get ready" : "Now";
-    var stageSub = isWarn ? ("Starts in "+t.warnMin+" min · "+t.fireAt) : ("Begin · "+t.fireAt);
+    // stage labels (all-P): Prepare = warn, Proceed = event-leaving (future), Perform = fire-at/do.
+    var STAGE_LABELS = { warn:"Prepare", proceed:"Proceed", begin:"Perform" };
+    var stageLabel = STAGE_LABELS[activePrompt.stage] || "Perform";
+    var stageSub = isWarn ? ("In "+t.warnMin+" min · "+t.fireAt) : ("Now · "+t.fireAt);
     var snoozeBtns = [5,15,30].map(function(m){
       return h("button",{key:m,onClick:function(){ snoozePrompt(m); },
         style:{flex:1,border:"1px solid "+C.panelEdge,background:C.panel,color:C.ink,borderRadius:6,padding:"12px 0",fontSize:14,fontWeight:600,cursor:"pointer"}}, "+"+m+"m");
@@ -759,8 +761,8 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.7"),
-        h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "MIL v0.2.8"),
+        h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "The important that is placed and the urgent that is done")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
       h("div",{style:{height:1,background:C.panelEdge}})
