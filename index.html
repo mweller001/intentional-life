@@ -58,6 +58,11 @@ var Store = {
     return db.from("items").update({ data: dataObj }).eq("id", id).select().then(function (r) {
       if (r.error) throw r.error; return r.data[0];
     });
+  },
+  remove: function (id) {
+    return db.from("items").delete().eq("id", id).then(function (r) {
+      if (r.error) throw r.error; return true;
+    });
   }
 };
 function readTask(row) {
@@ -137,26 +142,86 @@ function todayStr(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMo
 function timeToMin(s){ if(!s) return null; var p=String(s).split(":"); return (+p[0])*60 + (+p[1]); }
 function minToTime(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"); }
 
-// Self-contained inline title editor. Owns its own draft. Commits on Enter and on blur,
-// cancels on Escape, and — critically — commits on UNMOUNT for any reason (re-sort, tab
-// switch, timer re-render dropping the card). onCommit(value) and onCancel() are guarded
-// upstream against empty/unchanged, so a redundant call is a harmless no-op.
-function EditField(props){
-  var s = useState(props.initial || ""), val = s[0], setVal = s[1];
-  var ref = React.useRef(val); ref.current = val;
-  var committed = React.useRef(false);
-  function commit(){ if(committed.current) return; committed.current = true; props.onCommit(ref.current); }
-  useEffect(function(){
-    return function(){ commit(); }; // fires on unmount, however the unmount was caused
-  }, []);
-  return h("input",{autoFocus:true,value:val,
-    onChange:function(e){ setVal(e.target.value); },
-    onKeyDown:function(e){
-      if(e.key==="Enter"){ e.preventDefault(); commit(); }
-      else if(e.key==="Escape"){ committed.current = true; props.onCancel(); }
-    },
-    onBlur:function(){ commit(); },
-    style:props.style});
+// Shared task editor — used by capture (inline, empty) and edit (modal, pre-filled).
+// Owns all field state internally; calls onSubmit(fields) with the assembled values.
+// mode: "capture" → single primary button; "edit" → Save / Cancel / Delete.
+var WARN_OPTS = [ [0,"none"], [5,"5 min"], [15,"15 min"], [30,"30 min"], [60,"60 min"] ];
+function TaskForm(props){
+  var init = props.initial || {};
+  var s_t = useState(init.title || ""), title=s_t[0], setTitle=s_t[1];
+  var s_e = useState(init.effort || 2), effort=s_e[0], setEffort=s_e[1];
+  var s_p = useState(typeof init.priority==="number"?init.priority:5), priority=s_p[0], setPriority=s_p[1];
+  var s_so = useState(init.showOn || ""), showOn=s_so[0], setShowOn=s_so[1];
+  var s_fa = useState(init.fireAt || ""), fireAt=s_fa[0], setFireAt=s_fa[1];
+  var s_w = useState(init.warnMin || 0), warn=s_w[0], setWarn=s_w[1];
+  var s_open = useState(props.mode==="edit" ? !!init.showOn : false), open=s_open[0], setOpen=s_open[1];
+
+  function submit(){
+    var t = title.trim(); if(!t) return;
+    var fields = { title:t, effort:clampEffort(effort), priority:priority,
+      showOn: showOn || null, fireAt: showOn && fireAt ? fireAt : null,
+      warnMin: showOn && fireAt ? (warn||0) : 0 };
+    props.onSubmit(fields);
+  }
+
+  var effDots=[]; for(var n=1;n<=MAX_SPOON;n++){ (function(n){ effDots.push(
+    h("button",{key:n,onClick:function(){setEffort(n);},"aria-label":"effort "+n,
+      style:{width:16,height:16,borderRadius:8,cursor:"pointer",border:"none",background:n<=effort?C.amber:C.line}})); })(n); }
+  var effHint = effort>=MAX_SPOON ? "≈60+ · decompose?" : "≈"+minToLabel(SPOON_MIN[effort]);
+  var disabledTime = !showOn, disabledWarn = !showOn || !fireAt;
+
+  var promptRows = [
+    h("button",{key:"ptoggle",onClick:function(){ setOpen(!open); },
+      style:{background:"none",border:"none",padding:0,marginTop:12,cursor:"pointer",fontSize:12,color:C.cold,fontWeight:600}},
+      (open?"− prompt":"+ prompt") + (showOn && !open ? " · set" : ""))
+  ];
+  if (open){
+    promptRows.push(
+      h("div",{key:"pf",style:{marginTop:10,display:"flex",gap:14,flexWrap:"wrap",alignItems:"center"}},
+        h("label",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "show on",
+          h("input",{type:"date",value:showOn,onChange:function(e){ setShowOn(e.target.value); if(!e.target.value){ setFireAt(""); setWarn(0); } },
+            style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:C.ink}})),
+        h("label",{style:{fontSize:12,color:disabledTime?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "at",
+          h("input",{type:"time",value:fireAt,disabled:disabledTime,onChange:function(e){ setFireAt(e.target.value); if(!e.target.value) setWarn(0); },
+            style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledTime?C.faint:C.ink,opacity:disabledTime?0.5:1}})),
+        h("label",{style:{fontSize:12,color:disabledWarn?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "warn",
+          h("select",{value:String(warn),disabled:disabledWarn,onChange:function(e){ setWarn(Number(e.target.value)); },
+            style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledWarn?C.faint:C.ink,opacity:disabledWarn?0.5:1}},
+            WARN_OPTS.map(function(o){ return h("option",{key:o[0],value:String(o[0])}, o[1]); })))
+      ),
+      h("div",{key:"ph",style:{marginTop:8,fontSize:10.5,color:C.faint,fontStyle:"italic"}},
+        !showOn ? "A date makes the task appear that day and roll forward until done."
+        : !fireAt ? "Add a time to fire a prompt on that day (optional)."
+        : "Fires at "+fireAt+(warn?" with a "+warn+"-min warning.":" (no pre-warning).")));
+  }
+
+  var primaryLabel = props.mode==="edit" ? "Save" : "Capture";
+  var actionRow;
+  if (props.mode==="edit"){
+    actionRow = h("div",{style:{display:"flex",gap:8,marginTop:18,alignItems:"center"}},
+      h("button",{onClick:props.onDelete,style:{border:"1px solid #c25",background:"transparent",color:"#c25",borderRadius:6,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Delete"),
+      h("span",{style:{flex:1}}),
+      h("button",{onClick:props.onCancel,style:{border:"1px solid "+C.panelEdge,background:"transparent",color:C.sub,borderRadius:6,padding:"10px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Cancel"),
+      h("button",{onClick:submit,style:{background:C.ink,color:C.paper,border:"none",borderRadius:6,padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Save"));
+  } else {
+    actionRow = h("button",{onClick:submit,style:{marginLeft:"auto",background:C.ink,color:C.paper,border:"none",borderRadius:3,padding:"9px 16px",fontSize:13,cursor:"pointer",fontWeight:600}}, "Capture");
+  }
+
+  return h("div",null,
+    h("input",{value:title,autoFocus:props.mode==="edit",onChange:function(e){setTitle(e.target.value);},
+      onKeyDown:function(e){ if(e.key==="Enter" && props.mode!=="edit") submit(); },
+      placeholder:"Capture a task — just the title is enough",
+      style:{width:"100%",boxSizing:"border-box",border:"1px solid "+C.panelEdge,borderRadius:3,padding:"10px 12px",fontSize:14,color:C.ink,background:C.panel,fontFamily:"inherit"}}),
+    h("div",{style:{display:"flex",gap:16,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
+      h("label",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center"}}, "effort",
+        h("span",{style:{display:"inline-flex",gap:3,marginLeft:8}}, effDots),
+        h("span",{style:{marginLeft:8,fontSize:11,color:effort>=MAX_SPOON?C.amber:C.faint}}, effHint)),
+      h("span",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center",gap:8}}, "priority",
+        swatchRow(priority, function(v){ setPriority(v); }, 20)),
+      props.mode!=="edit" ? actionRow : null),
+    h("div",null, promptRows),
+    props.mode==="edit" ? actionRow : null
+  );
 }
 
 function App() {
@@ -167,18 +232,12 @@ function App() {
   var s_tasks = useState([]), tasks = s_tasks[0], setTasks = s_tasks[1];
   var s_appts = useState([]), appts = s_appts[0], setAppts = s_appts[1];
   var s_hist = useState(false), historyOpen = s_hist[0], setHistoryOpen = s_hist[1];
-  var s_title = useState(""), newTitle = s_title[0], setNewTitle = s_title[1];
-  var s_eff = useState(2), newEffort = s_eff[0], setNewEffort = s_eff[1];
-  var s_pri = useState(5), newPriority = s_pri[0], setNewPriority = s_pri[1];
   var s_now = useState(nowMinutes()), nowMin = s_now[0], setNowMin = s_now[1];
-  // v0.2 contextual popup: which task and where on screen. (editId tracks inline editing.)
+  // v0.2 contextual popup: which task and where on screen.
   var s_pop = useState(null), popup = s_pop[0], setPopup = s_pop[1]; // {id,x,y} or null
-  var s_edit = useState(null), editId = s_edit[0], setEditId = s_edit[1]; // task id being text-edited, or null
-  // capture prompt fields (optional, behind a "+ prompt" disclosure; default empty = no prompt)
-  var s_pOpen = useState(false), promptOpen = s_pOpen[0], setPromptOpen = s_pOpen[1];
-  var s_pDate = useState(""), newShowOn = s_pDate[0], setNewShowOn = s_pDate[1];
-  var s_pTime = useState(""), newFireAt = s_pTime[0], setNewFireAt = s_pTime[1];
-  var s_pWarn = useState(0), newWarn = s_pWarn[0], setNewWarn = s_pWarn[1];
+  // full edit modal: task id being edited, or null. Confirm-delete flag within it.
+  var s_editId = useState(null), editId = s_editId[0], setEditId = s_editId[1];
+  var s_confirmDel = useState(false), confirmDel = s_confirmDel[0], setConfirmDel = s_confirmDel[1];
   // active fired prompt shown full-screen: { id, stage:"warn"|"begin" } or null
   var s_fire = useState(null), activePrompt = s_fire[0], setActivePrompt = s_fire[1];
   // bookkeeping: which (taskId|fireAt|stage) tuples have already fired this session, so we
@@ -347,67 +406,54 @@ function App() {
     return { elapsedAppts:elapsedAppts, combined:combined };
   }, [schedule.blocks, sorted.done, nowMin]);
 
-  var addTask = useCallback(function(){
-    var title = newTitle.trim(); if(!title) return;
-    var dataObj = { title:title, project:"—", priority:newPriority, effort:clampEffort(newEffort), done:false };
-    // prompt fields are optional; only attach a fireAt/warn if a showOn date is set.
-    if (newShowOn){
-      dataObj.showOn = newShowOn;
-      if (newFireAt){ dataObj.fireAt = newFireAt; dataObj.warnMin = newWarn || 0; }
-    }
+  // TaskForm (capture mode) hands back assembled fields.
+  var submitNewTask = useCallback(function(fields){
+    var dataObj = { title:fields.title, project:"—", priority:fields.priority, effort:clampEffort(fields.effort), done:false };
+    if (fields.showOn){ dataObj.showOn = fields.showOn; if(fields.fireAt){ dataObj.fireAt = fields.fireAt; dataObj.warnMin = fields.warnMin||0; } }
     setStatus("Saving…");
     Store.add("task", dataObj).then(function(row){
       setTasks(function(prev){ return prev.concat([readTask(row)]); });
-      setNewTitle(""); setNewEffort(2); setNewPriority(5);
-      setNewShowOn(""); setNewFireAt(""); setNewWarn(0); setPromptOpen(false);
       setStatus("");
     }).catch(function(e){ setStatus("Save failed: " + (e.message||e)); });
-  }, [newTitle, newEffort, newPriority, newShowOn, newFireAt, newWarn]);
+  }, []);
 
-  // Merge-and-persist: take the current task, apply a patch, write the full data object back.
-  // Centralizes writes so no path (done/title/priority) silently drops another's fields.
+  // Merge-and-persist: apply a patch, write the full data object back via the shared serializer.
   var persist = useCallback(function(id, patch){
     setTasks(function(prev){
       var next = prev.map(function(x){ return x.id===id ? Object.assign({}, x, patch) : x; });
       var t = next.filter(function(x){return x.id===id;})[0];
-      if (t){
-        Store.update(id, taskToData(t)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
-      }
+      if (t){ Store.update(id, taskToData(t)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); }); }
       return next;
     });
   }, []);
 
   var toggleDone = useCallback(function(id){
-    setPopup(null); setEditId(null);
+    setPopup(null);
     var t = tasks.filter(function(x){return x.id===id;})[0]; if(!t) return;
     persist(id, { done: !t.done });
   }, [tasks, persist]);
 
-  // value comes from the field itself (it owns its draft); guard empty + unchanged here too.
-  var saveTitle = useCallback(function(id, value){
-    var t = (value||"").trim();
-    setTasks(function(prev){
-      var cur = prev.filter(function(x){return x.id===id;})[0];
-      if (t && cur && t !== cur.title){
-        var merged = Object.assign({}, cur, { title:t });
-        Store.update(id, taskToData(merged)).catch(function(e){ setStatus("Update failed: " + (e.message||e)); });
-        return prev.map(function(x){ return x.id===id ? merged : x; });
-      }
-      return prev;
-    });
-    setEditId(null);
-  }, []);
+  var setPriorityFor = useCallback(function(id, v){ persist(id, { priority:v }); }, [persist]);
 
-  var setPriorityFor = useCallback(function(id, v){
-    persist(id, { priority:v });
-  }, [persist]);
+  // Open the full edit modal for a task (from the contextual popup's Edit button).
+  var openEditor = useCallback(function(id){ setEditId(id); setConfirmDel(false); setPopup(null); }, []);
 
-  var openEdit = useCallback(function(id){
-    setEditId(id);
-    setPopup(null); // Option 1: Edit launches the inline card field; the popup's job is done.
-  }, []);
+  // TaskForm (edit mode) hands back all fields → patch the task and close.
+  var saveEdit = useCallback(function(fields){
+    var id = editId; if(id==null) return;
+    persist(id, { title:fields.title, priority:fields.priority, effort:fields.effort,
+      showOn:fields.showOn, fireAt:fields.fireAt, warnMin:fields.warnMin });
+    setEditId(null); setConfirmDel(false);
+  }, [editId, persist]);
 
-  var closePopup = useCallback(function(){ setPopup(null); setEditId(null); }, []);
+  var deleteTask = useCallback(function(){
+    var id = editId; if(id==null) return;
+    setTasks(function(prev){ return prev.filter(function(x){return x.id!==id;}); });
+    Store.remove(id).catch(function(e){ setStatus("Delete failed: " + (e.message||e)); });
+    setEditId(null); setConfirmDel(false);
+  }, [editId]);
+
+  var closePopup = useCallback(function(){ setPopup(null); }, []);
 
   // Pointer-events long-press (no 300ms synthetic-click ghost) + right-click on desktop.
   var pressTimer = React.useRef(null);
@@ -423,7 +469,6 @@ function App() {
     function openAt(clientX, clientY){
       openGuardUntil.current = Date.now() + 120; // swallow the tail of this same gesture
       setPopup({ id:task.id, x:clientX, y:clientY });
-      setEditId(null);
     }
     return {
       onPointerDown:function(e){
@@ -512,12 +557,8 @@ function App() {
       } else {
         var sw = prioritySwatch(it.priority);
         var ph = pressHandlers(it);
-        var titleNode = (editId===it.id)
-          ? h(EditField,{ initial: it.title,
-              onCommit:function(v){ saveTitle(it.id, v); },
-              onCancel:function(){ setEditId(null); },
-              style:{width:"100%",boxSizing:"border-box",border:"1px solid "+sw.color,borderRadius:3,padding:"4px 7px",fontSize:14,color:C.ink,fontFamily:"inherit",fontWeight:500} })
-          : h("div",{style:{fontSize:14,color:C.ink,fontWeight:500,lineHeight:1.3,cursor:"default"}}, it.title);
+        var titleNode = h("div",{style:{fontSize:14,color:C.ink,fontWeight:500,lineHeight:1.3}}, it.title);
+        var promptTag = it.fireAt ? h("span",{style:{fontSize:11,color:C.cold}}, "· ⏰ "+it.fireAt) : null;
         railChildren.push(
           h("div",Object.assign({key:it.id||("t"+i),style:{border:"1px solid "+C.panelEdge,borderLeft:"5px solid "+sw.color,background:C.panel,borderRadius:3,padding:"10px 12px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start",WebkitUserSelect:"none",userSelect:"none",touchAction:"pan-y"}},ph),
             h("button",{onClick:function(){toggleDone(it.id);},"aria-label":"mark done",style:{marginTop:2,width:16,height:16,flexShrink:0,border:"1.5px solid "+C.faint,borderRadius:3,background:"transparent",cursor:"pointer"}}),
@@ -527,6 +568,7 @@ function App() {
                 h("span",{style:{fontSize:11,color:it.unfitted?C.cold:C.faint,fontVariantNumeric:"tabular-nums"}},
                   it.unfitted ? "doesn't fit ahead" : (it.schStart+"–"+it.schEnd)),
                 h("span",{style:{fontSize:11,color:C.sub}}, "· "+it.project),
+                promptTag,
                 spoonDots(it.effort, sw.color)
               ),
               it.note ? h("div",{style:{fontSize:11.5,color:C.faint,marginTop:5,fontStyle:"italic"}}, it.note) : null
@@ -563,55 +605,9 @@ function App() {
     sortBtns.push(h("div",{key:"count",style:{marginLeft:"auto",alignSelf:"center",fontSize:11.5,color:C.faint}}, countText));
     children.push(h("div",{key:"sorts",style:{display:"flex",flexWrap:"wrap",gap:6,margin:"16px 0 0"}}, sortBtns));
 
-    var effDots=[]; for(var n=1;n<=MAX_SPOON;n++){ (function(n){ effDots.push(h("button",{key:n,onClick:function(){setNewEffort(n);},"aria-label":"effort "+n,style:{width:16,height:16,borderRadius:8,cursor:"pointer",border:"none",background:n<=newEffort?C.amber:C.line}})); })(n); }
-    var effHint = newEffort>=MAX_SPOON ? "≈60+ · decompose?" : "≈"+minToLabel(SPOON_MIN[newEffort]);
-    // "+ prompt" disclosure — optional, cascading: date unlocks time, time unlocks warning.
-    var warnOpts = [ [0,"none"], [5,"5 min"], [15,"15 min"], [30,"30 min"], [60,"60 min"] ];
-    var promptRows = [];
-    promptRows.push(
-      h("button",{key:"ptoggle",onClick:function(){ setPromptOpen(!promptOpen); },
-        style:{background:"none",border:"none",padding:0,marginTop:12,cursor:"pointer",fontSize:12,color:C.cold,fontWeight:600}},
-        (promptOpen?"− prompt":"+ prompt") + (newShowOn && !promptOpen ? " · set" : ""))
-    );
-    if (promptOpen){
-      var disabledTime = !newShowOn;
-      var disabledWarn = !newShowOn || !newFireAt;
-      promptRows.push(
-        h("div",{key:"pfields",style:{marginTop:10,display:"flex",gap:14,flexWrap:"wrap",alignItems:"center"}},
-          h("label",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "show on",
-            h("input",{type:"date",value:newShowOn,onChange:function(e){ setNewShowOn(e.target.value); if(!e.target.value){ setNewFireAt(""); setNewWarn(0); } },
-              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:C.ink}})),
-          h("label",{style:{fontSize:12,color:disabledTime?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "at",
-            h("input",{type:"time",value:newFireAt,disabled:disabledTime,onChange:function(e){ setNewFireAt(e.target.value); if(!e.target.value) setNewWarn(0); },
-              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledTime?C.faint:C.ink,opacity:disabledTime?0.5:1}})),
-          h("label",{style:{fontSize:12,color:disabledWarn?C.faint:C.sub,display:"inline-flex",alignItems:"center",gap:6}}, "warn",
-            h("select",{value:String(newWarn),disabled:disabledWarn,onChange:function(e){ setNewWarn(Number(e.target.value)); },
-              style:{border:"1px solid "+C.panelEdge,borderRadius:3,padding:"6px 8px",fontSize:13,fontFamily:"inherit",color:disabledWarn?C.faint:C.ink,opacity:disabledWarn?0.5:1}},
-              warnOpts.map(function(o){ return h("option",{key:o[0],value:String(o[0])}, o[1]); })))
-        )
-      );
-      promptRows.push(
-        h("div",{key:"phint",style:{marginTop:8,fontSize:10.5,color:C.faint,fontStyle:"italic"}},
-          !newShowOn ? "A date makes the task appear that day and roll forward until done."
-          : !newFireAt ? "Add a time to fire a prompt on that day (optional)."
-          : "Fires at " + newFireAt + (newWarn? " with a " + newWarn + "-min warning." : " (no pre-warning)."))
-      );
-    }
-
     children.push(
       h("div",{key:"capture",style:{marginTop:18,paddingTop:16,borderTop:"1px solid "+C.line}},
-        h("input",{value:newTitle,onChange:function(e){setNewTitle(e.target.value);},onKeyDown:function(e){ if(e.key==="Enter") addTask(); },placeholder:"Capture a task — just the title is enough",style:{width:"100%",boxSizing:"border-box",border:"1px solid "+C.panelEdge,borderRadius:3,padding:"10px 12px",fontSize:14,color:C.ink,background:C.panel,fontFamily:"inherit"}}),
-        h("div",{style:{display:"flex",gap:16,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
-          h("label",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center"}}, "effort",
-            h("span",{style:{display:"inline-flex",gap:3,marginLeft:8}}, effDots),
-            h("span",{style:{marginLeft:8,fontSize:11,color:newEffort>=MAX_SPOON?C.amber:C.faint}}, effHint)
-          ),
-          h("span",{style:{fontSize:12,color:C.sub,display:"inline-flex",alignItems:"center",gap:8}}, "priority",
-            swatchRow(newPriority, function(v){ setNewPriority(v); }, 20)
-          ),
-          h("button",{onClick:addTask,style:{marginLeft:"auto",background:C.ink,color:C.paper,border:"none",borderRadius:3,padding:"9px 16px",fontSize:13,cursor:"pointer",fontWeight:600}}, "Capture")
-        ),
-        h("div",null, promptRows)
+        h(TaskForm,{ mode:"capture", initial:{}, onSubmit:submitNewTask })
       )
     );
 
@@ -679,7 +675,7 @@ function App() {
     var x = Math.min(popup.x, vw - W - 10); if(x<10) x=10;
     var y = Math.min(popup.y, vh - Hpop - 10); if(y<10) y=10;
     // Edit launches the inline card field and closes the popup.
-    var actionBtn = h("button",{key:"edit",onClick:function(e){ e.stopPropagation(); openEdit(task.id); },
+    var actionBtn = h("button",{key:"edit",onClick:function(e){ e.stopPropagation(); openEditor(task.id); },
           style:{border:"1px solid "+C.panelEdge,background:C.paper,borderRadius:4,padding:"7px 12px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer",whiteSpace:"nowrap"}}, "Edit");
     var menuChildren = [
       h("div",{key:"row",style:{display:"flex",alignItems:"center",gap:12}},
@@ -724,6 +720,36 @@ function App() {
     );
   }
 
+  function editModalNode(){
+    if (editId==null) return null;
+    var t = tasks.filter(function(x){return x.id===editId;})[0];
+    if (!t){ return null; }
+    var body;
+    if (confirmDel){
+      body = h("div",null,
+        h("div",{style:{fontSize:16,fontWeight:600,color:C.ink,marginBottom:8}}, "Delete this task?"),
+        h("div",{style:{fontSize:13,color:C.sub,marginBottom:18}}, "\u201C"+t.title+"\u201D will be permanently removed."),
+        h("div",{style:{display:"flex",gap:8}},
+          h("button",{onClick:function(){ setConfirmDel(false); },style:{flex:1,border:"1px solid "+C.panelEdge,background:"transparent",color:C.sub,borderRadius:6,padding:"11px 0",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Keep"),
+          h("button",{onClick:deleteTask,style:{flex:1,border:"none",background:"#c25",color:"#fff",borderRadius:6,padding:"11px 0",fontSize:13,fontWeight:600,cursor:"pointer"}}, "Delete")
+        )
+      );
+    } else {
+      body = h(TaskForm,{ mode:"edit",
+        initial:{ title:t.title, effort:t.effort, priority:t.priority, showOn:t.showOn, fireAt:t.fireAt, warnMin:t.warnMin },
+        onSubmit:saveEdit,
+        onCancel:function(){ setEditId(null); },
+        onDelete:function(){ setConfirmDel(true); } });
+    }
+    return h("div",{key:"editbackdrop",onClick:function(){ if(!confirmDel) setEditId(null); },
+        style:{position:"fixed",inset:0,zIndex:70,background:"rgba(28,31,38,0.45)",display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 18px",overflowY:"auto"}},
+      h("div",{onClick:function(e){e.stopPropagation();},
+        style:{width:"100%",maxWidth:440,background:C.paper,borderRadius:12,padding:"22px 20px",boxShadow:"0 18px 50px rgba(0,0,0,0.3)"}},
+        h("div",{style:{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:C.faint,fontWeight:700,marginBottom:14}}, confirmDel?"Confirm":"Edit task"),
+        body)
+    );
+  }
+
   var tabBtns = [["foreground","Foreground"],["background","Background"],["relaxation","Relaxation"]].map(function(pair){
     var k=pair[0], label=pair[1], on=tab===k;
     return h("button",{key:k,onClick:function(){setTab(k);},style:{flex:1,border:"1px solid "+(on?C.amber:C.panelEdge),background:on?C.amberSoft:"transparent",color:on?C.ink:C.sub,borderRadius:2,padding:"9px 6px",fontSize:13,fontWeight:600,cursor:"pointer"}}, label);
@@ -731,10 +757,11 @@ function App() {
 
   return h("div",{style:{minHeight:"100vh"}},
     firePromptNode(),
+    editModalNode(),
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.5"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.6"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
