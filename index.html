@@ -128,6 +128,24 @@ function prioritySwatch(p){
   for (var i=0;i<PRIORITY.length;i++){ if(p>=PRIORITY[i].v){ best=PRIORITY[i]; break; } }
   return best;
 }
+// top-level so BOTH App and TaskForm can use them (they depend only on h/C/PRIORITY/MAX_SPOON).
+function spoonDots(effort, tone){
+  var dots=[]; for(var k=0;k<MAX_SPOON;k++){ dots.push(h("span",{key:k,style:{width:5,height:5,borderRadius:5,background:k<effort?tone:C.line}})); }
+  return h("span",{style:{display:"inline-flex",gap:3}}, dots);
+}
+function swatchRow(selectedV, onPick, size){
+  size = size || 22;
+  return h("span",{style:{display:"inline-flex",gap:6}},
+    PRIORITY.map(function(p){
+      var on = p.v===selectedV;
+      return h("button",{key:p.key,onClick:function(e){ e.stopPropagation(); onPick(p.v); },title:p.label,"aria-label":"priority "+p.label,
+        style:{width:size,height:size,borderRadius:4,cursor:"pointer",background:p.color,
+          border:on?"2px solid "+C.ink:"2px solid transparent",
+          boxShadow:on?"0 0 0 1px #fff inset":"none",
+          transform:on?"scale(1.08)":"none",transition:"transform .08s"}});
+    })
+  );
+}
 var SORTS = {
   default:   { label:"Default",        sub:"priority, then heaviest", fn:function(a,b){ return b.priority-a.priority || b.effort-a.effort; } },
   light:     { label:"Quick first",    sub:"lightest, then priority", fn:function(a,b){ return a.effort-b.effort || b.priority-a.priority; } },
@@ -503,26 +521,6 @@ function App() {
     );
   }
 
-  function spoonDots(effort, tone){
-    var dots=[]; for(var k=0;k<MAX_SPOON;k++){ dots.push(h("span",{key:k,style:{width:5,height:5,borderRadius:5,background:k<effort?tone:C.line}})); }
-    return h("span",{style:{display:"inline-flex",gap:3}}, dots);
-  }
-
-  // A row of priority swatches. selectedV = currently chosen stored value; onPick(v) commits.
-  function swatchRow(selectedV, onPick, size){
-    size = size || 22;
-    return h("span",{style:{display:"inline-flex",gap:6}},
-      PRIORITY.map(function(p){
-        var on = p.v===selectedV;
-        return h("button",{key:p.key,onClick:function(e){ e.stopPropagation(); onPick(p.v); },title:p.label,"aria-label":"priority "+p.label,
-          style:{width:size,height:size,borderRadius:4,cursor:"pointer",background:p.color,
-            border:on?"2px solid "+C.ink:"2px solid transparent",
-            boxShadow:on?"0 0 0 1px #fff inset":"none",
-            transform:on?"scale(1.08)":"none",transition:"transform .08s"}});
-      })
-    );
-  }
-
   function foreground(){
     // keep unfitted tasks (no real time) always; drop fitted items / events only once elapsed
     var items = schedule.railItems.filter(function(it){ return it.unfitted || it.endMin > nowMin; });
@@ -761,7 +759,7 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.6"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.7"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "the urgent that is always done, and the important that is finally heard")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
