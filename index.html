@@ -662,6 +662,57 @@ function App() {
     );
   }
 
+  // ---- Process reference panels (static-but-structured; stage-1 reference, migrates to instrumented) ----
+  function processStep(n, title, framing){
+    return h("div",{key:n,style:{display:"flex",gap:14,marginBottom:18,alignItems:"flex-start"}},
+      h("span",{style:{flexShrink:0,width:26,height:26,borderRadius:14,background:C.amberSoft,color:C.amber,
+        display:"inline-flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia, serif",fontSize:14,fontWeight:700}}, n),
+      h("div",{style:{flex:1}},
+        h("div",{style:{fontSize:15,fontWeight:600,color:C.ink,fontFamily:"Georgia, serif",lineHeight:1.3}}, title),
+        h("div",{style:{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}, framing)
+      )
+    );
+  }
+  function processNote(label, text){
+    return h("div",{style:{marginTop:20,paddingTop:14,borderTop:"1px dashed "+C.panelEdge}},
+      h("div",{style:{fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:C.faint,fontWeight:700,marginBottom:6}}, label),
+      h("div",{style:{fontSize:12.5,color:C.sub,lineHeight:1.55,fontStyle:"italic"}}, text)
+    );
+  }
+  function eveningProcess(){
+    return h("section",{style:{maxWidth:"54ch"}},
+      eyebrow("PM","The Evening Process"),
+      h("p",{style:leadStyle}, "Three questions, in order, each answered honestly and briefly. Its output is a heading for the scout, not a plan."),
+      processStep("1","Position \u2014 where am I, actually, right now?",
+        "The true current coordinates as the day closes; not where one wished or planned to be. The honest statement the scout launches from \u2014 the background cannot scout from a falsified position."),
+      processStep("2","Possibility \u2014 from this honest position, where could I be tomorrow?",
+        "Not the ideal; the possible, given actual current energy, conditions, and constraints."),
+      processStep("3","Alignment \u2014 does the path from here to there move through what matters?",
+        "Not perfectly or completely, but meaningfully: does tomorrow, as currently foreseeable, advance the load-bearing values?"),
+      processNote("Output",
+        "A heading \u2014 precise enough that the scout knows where to range overnight, loose enough that tomorrow's real conditions can shape it. The scanner is then released from the day's accounting."),
+      h("div",{style:{marginTop:20,paddingTop:16,borderTop:"1px solid "+C.line}},
+        h("div",{style:{fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:C.good,fontWeight:700,marginBottom:8}}, "Closing element"),
+        h("div",{style:{fontSize:16,fontWeight:600,color:C.ink,fontFamily:"Georgia, serif"}}, "\u201CWhat am I grateful for tonight?\u201D"),
+        h("div",{style:{fontSize:12.5,color:C.sub,marginTop:6,lineHeight:1.55}},
+          "Appended at the very end. Present-facing and non-instrumental, distinct from the forward-facing process above \u2014 a focused, honest question, never a survey or a posture. \u201CTonight\u201D anchors it to the concrete good of the particular day.")
+      )
+    );
+  }
+  function morningProcess(){
+    return h("section",{style:{maxWidth:"54ch"}},
+      eyebrow("AM","The Morning Process"),
+      h("p",{style:leadStyle}, "Three steps, in order."),
+      processStep("1","Scout review \u2014 first, what came back?",
+        "Review what the background returned overnight against the heading set the night before. A quiet scout after a heavy or tiring day is normal \u2014 the background was spent on the day's work and had no surplus to range. It is not a failure."),
+      processStep("2","Completeness check \u2014 is the list complete enough to start?",
+        "Scan the surface; capture any gaps so nothing rides loose in the scanner. Not whether the list is perfect, but whether it is complete enough to launch the day from."),
+      processStep("3","Selection \u2014 what would I be glad tonight I moved?",
+        "Spoons-aware: choose the one or two things that, looked back on at day's end, would most justify the day \u2014 matched honestly to the capacity actually available, not the capacity one wishes for."),
+      processNote("Why it runs daily",
+        "The evening review keeps the scout directed for about one day; past roughly two days without a review the scout reverts to an undirected, faintly unsettled state (a directed scout feels distinctly better). So the review has about a one-day buffer, then degrades \u2014 which is why it is mechanically a daily process, not an aspirational one.")
+    );
+  }
   function popupNode(){
     if(!popup) return null;
     var task = tasks.filter(function(x){return x.id===popup.id;})[0];
@@ -750,7 +801,7 @@ function App() {
     );
   }
 
-  var tabBtns = [["foreground","Foreground"],["background","Background"],["relaxation","Relaxation"]].map(function(pair){
+  var tabBtns = [["foreground","Foreground"],["background","Background"],["relaxation","Relaxation"],["morning","Morning"],["evening","Evening"]].map(function(pair){
     var k=pair[0], label=pair[1], on=tab===k;
     return h("button",{key:k,onClick:function(){setTab(k);},style:{flex:1,border:"1px solid "+(on?C.amber:C.panelEdge),background:on?C.amberSoft:"transparent",color:on?C.ink:C.sub,borderRadius:2,padding:"9px 6px",fontSize:13,fontWeight:600,cursor:"pointer"}}, label);
   });
@@ -761,7 +812,7 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:1180,margin:"0 auto",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:26,fontWeight:600,letterSpacing:-0.2}}, "MIL v0.2.8"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:22,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.9"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "The important that is placed and the urgent that is done")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
@@ -769,11 +820,13 @@ function App() {
     ),
     h("div",{className:"il-tabs",style:{maxWidth:1180,margin:"0 auto",padding:"10px 24px 0",gap:6}}, tabBtns),
     h("main",{style:{maxWidth:1180,margin:"0 auto",padding:"18px 24px calc(60px + env(safe-area-inset-bottom))"}},
-      h("div",{className:"il-cols"},
-        h("section",{className:tab==="foreground"?"il-active":""}, foreground()),
-        h("section",{className:tab==="background"?"il-active":""}, background()),
-        h("section",{className:tab==="relaxation"?"il-active":""}, relaxation())
-      )
+      (tab==="morning" || tab==="evening")
+        ? (tab==="morning" ? morningProcess() : eveningProcess())
+        : h("div",{className:"il-cols"},
+            h("section",{className:tab==="foreground"?"il-active":""}, foreground()),
+            h("section",{className:tab==="background"?"il-active":""}, background()),
+            h("section",{className:tab==="relaxation"?"il-active":""}, relaxation())
+          )
     )
   );
 }
