@@ -689,7 +689,7 @@ function App() {
   function eveningProcess(){
     return h("section",{style:{maxWidth:"54ch"}},
       eyebrow("PM","The Evening Process"),
-      h("p",{style:leadStyle}, "Five steps, in order, each answered honestly and briefly."),
+      h("p",{style:leadStyle}, "Five steps, in order."),
       processStepBare("1","What has been accomplished today?","review memory, tasks, and calendar"),
       processStepBare("2","What should be scheduled for tomorrow?","review goals, update tasks and calendar"),
       processStepBare("3","Does the path from here to there move through what matters?",null),
@@ -703,9 +703,7 @@ function App() {
       h("p",{style:leadStyle}, "Three steps, in order."),
       processStepBare("1","Scout review \u2014 what returned overnight?",null),
       processStepBare("2","Update tasks and calendar \u2014 is the list complete enough to begin the day?",null),
-      processStepBare("3","Priorities \u2014 verify what I will be glad of tonight is appropriately placed.",null),
-      processNote("Why it runs daily",
-        "The evening review keeps the scout directed for about one day; past roughly two days without a review the scout reverts to an undirected, faintly unsettled state (a directed scout feels distinctly better). So the review has about a one-day buffer, then degrades \u2014 which is why it is mechanically a daily process, not an aspirational one.")
+      processStepBare("3","Priorities \u2014 verify what I will be glad of tonight is appropriately placed.",null)
     );
   }
   function popupNode(){
@@ -807,7 +805,7 @@ function App() {
     popupNode(),
     h("header",{style:{maxWidth:640,margin:"0",padding:"max(28px, env(safe-area-inset-top)) 24px 10px"}},
       h("div",{style:{display:"flex",alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:22,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.12"),
+        h("h1",{style:{margin:0,fontFamily:"Georgia, serif",fontSize:22,fontWeight:600,letterSpacing:-0.2}}, "My Intentional Life v0.2.13"),
         h("div",{style:{fontSize:12.5,color:C.sub,fontStyle:"italic"}}, "The important that is placed and the urgent that is done")
       ),
       h("div",{id:"status-bar",style:{color:(status.indexOf("Could not")===0||status.indexOf("failed")>-1)?"#a23":C.faint}}, status),
